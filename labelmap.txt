@@ -1,0 +1,3 @@
+# label:color_rgb:parts:actions
+door:192,224,192::
+background:0,0,0::
