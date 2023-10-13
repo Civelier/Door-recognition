@@ -1,5 +1,6 @@
 cache/*
-Annotations/*
-Images/*
+deepdoors2/*
 test_data/*
 result.*
+venv*
+__pycache__*

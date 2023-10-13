@@ -4,11 +4,11 @@ import tensorflow as tf
 from tensorflow import keras
 
 # Load the trained model
-model = keras.models.load_model('final_model.h5')
+model = keras.models.load_model('cache/final_model.h5')
 tf.keras.utils.plot_model(model, show_shapes=True)
 
 # Load the image you want to segment
-image_path = 'Door0016.png'  # Replace with the path to your image
+image_path = 'Images/Door0016.png'  # Replace with the path to your image
 image = cv2.imread(image_path)
 
 # Preprocess the image (resize to match the model's input shape)
