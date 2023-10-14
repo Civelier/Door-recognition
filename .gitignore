@@ -5,3 +5,5 @@ result.*
 venv*
 __pycache__*
 display.*
+train_preview.png
+display.png

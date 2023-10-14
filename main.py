@@ -174,6 +174,7 @@ def display1(display_list, output="display.png", forceSave=False):
         plt.axis("off")
     if IS_REMOTE or forceSave:
         fig.savefig(output)
+        plt.close(fig)
     else:
         plt.show()
     
@@ -192,6 +193,7 @@ def display(display_list, output="display.png", forceSave=False):
         plt.axis("off")
     if IS_REMOTE or forceSave:
         fig.savefig(output)
+        plt.close(fig)
     else:
         plt.show()
 
@@ -241,10 +243,7 @@ def flip_hori(img, mask):
 
     
 def create_mask(pred_mask):
-    return (pred_mask > 0.5).astype(np.uint8)[0]
-    pred_mask = tf.math.argmax(pred_mask, axis=-1)
-    pred_mask = pred_mask[..., tf.newaxis]
-    return pred_mask[0]
+    return (pred_mask > 0.35).astype(np.uint8)[0]
 
 
 def show_predictions(dataset=None, models=[model], num=1, output="display.png", forceSave=False):
@@ -289,7 +288,9 @@ def load(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     
     ld = not os.path.exists(f"{DATASET_CACHE_PATH}/train")
@@ -347,7 +348,9 @@ def sample(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     
     # Dependency
@@ -552,7 +555,9 @@ def create_model(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     
     if sample_image is None:
@@ -597,13 +602,17 @@ class DisplayCallback(tf.keras.callbacks.Callback):
         print("\nSample Prediction after epoch {}\n".format(epoch + 1))
         
 class FileSaveCallback(tf.keras.callbacks.Callback):
-    def __init__(self, mdl:tf.keras.Model=model):
+    def __init__(self, mdl:tf.keras.Model=model, frequency=1):
         super().__init__()
+        self.i = 0
+        self.frequency = frequency
         self.mdl = mdl
     def on_epoch_end(self, epoch, logs=None):
-        clear_output(wait=True)
-        show_predictions(models=[self.mdl],output="train_preview.png", forceSave=True)
-        print("\nSample Prediction after epoch {}\n".format(epoch + 1))
+        if self.i % self.frequency == 0:
+            clear_output(wait=True)
+            show_predictions(models=[self.mdl],output="train_preview.png", forceSave=True)
+            print("\nSample Prediction after epoch {}\n".format(epoch + 1))
+        self.i += 1
 
 def draw_model(*args):
     create_model()
@@ -615,16 +624,19 @@ def train_ai(*args):
     p.add_argument('-d', '--display', action="store_true", help="diplay the prediction at every epoch")
     p.add_argument('-e', '--epochs', type=int, default=EPOCHS, required=False, help="number of epochs to train for")
     p.add_argument('-p', '--plot', action="store_true", help="when training done, plot the history graph")
+    p.add_argument('-f', '--frequency', type=int, default=10, help="save preview frequency")
     def onexit(*args, **kwargs):
         global on_exit
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     create_model()
     
-    cbs = [tf.keras.callbacks.ProgbarLogger('steps'), FileSaveCallback(model), tf.keras.callbacks.ModelCheckpoint(MODEL_PATH)]
+    cbs = [FileSaveCallback(model, a.frequency), tf.keras.callbacks.ModelCheckpoint(MODEL_PATH, save_best_only=True)]
     if a.display:
         cbs.append(DisplayCallback())
     model_history = model.fit(train_batches, epochs=a.epochs,
@@ -647,6 +659,7 @@ def train_ai(*args):
         plt.legend()
         if IS_REMOTE:
             fig.savefig("display.png")
+            plt.close(fig)
         else:
             plt.show()
 
@@ -661,7 +674,9 @@ def predict(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     
     create_model()
@@ -694,7 +709,9 @@ def benchmark_models(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     
     sample()
@@ -721,9 +738,9 @@ def benchmark_models(*args):
         losses.MeanAbsoluteError,
         losses.CategoricalCrossentropy,
         losses.SparseCategoricalCrossentropy,
-        losses.Poisson,
+        # losses.Poisson,
         losses.BinaryCrossentropy,
-        losses.BinaryFocalCrossentropy,
+        # losses.BinaryFocalCrossentropy,
     ]
     
     mts:List[metrics.Metric] = [
@@ -740,7 +757,7 @@ def benchmark_models(*args):
         metrics.BinaryAccuracy,
         metrics.BinaryCrossentropy,
         metrics.BinaryIoU,
-        metrics.AUC,
+        # metrics.AUC,
     ]
     
     permutations:List[Tuple(Callable[[int], tf.keras.Model], optimizers.Optimizer, losses.Loss, metrics.Metric, str)] = []
@@ -785,7 +802,7 @@ def benchmark_models(*args):
             try:
                 mdl.compile(optimizer=optimizer, loss=loss, metrics=[metric])
                 mdl.save(compiledPath)
-            except KeyError or ValueError as e:
+            except Exception as e:
                 p = Path(failPath)
                 p.touch()
                 with p.open('w') as wr:
@@ -816,9 +833,10 @@ def benchmark_models(*args):
                 plt.ylim([0, 1])
                 plt.legend()
                 fig.savefig(plotPath)
+                plt.close(fig)
                 
                 show_predictions(models=[mdl], output=resultPath)
-            except KeyError or ValueError as e:
+            except Exception as e:
                 p = Path(failPath)
                 p.touch()
                 with p.open('w') as wr:
@@ -881,7 +899,9 @@ def benchmark_results(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
+    global on_exit
     if on_exit:
+        on_exit = False
         return
     shape = (0,0,0)
     sample()

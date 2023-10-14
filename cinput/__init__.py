@@ -150,7 +150,10 @@ def menuArgsInput(menu:Menu, name:str):
     while True:
         if callable(menu):
             print(name)
-            menu(*args)
+            try:
+                menu(*args)
+            except KeyboardInterrupt:
+                print()
             menu = stk.pop()
         if isinstance(menu, dict):
             opt = f'{name}\n\t-> back\n\t-> '
