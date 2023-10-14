@@ -2,7 +2,6 @@ import multiprocessing
 import os
 from pathlib import Path
 from unittest.main import MODULE_EXAMPLES
-from venv import create
 import cv2
 import numpy as np
 
@@ -18,6 +17,9 @@ import pandas as pd
 import logging
 from colorama import init, Fore, Back, Style
 from tqdm import tqdm, tqdm_gui
+
+import tkinter as tk
+from tkinter import filedialog
 
 metrics = tf.keras.metrics
 losses = tf.keras.losses
@@ -44,7 +46,8 @@ LABELS = {
     2: (0,0,128),
     3: (0,128,0),
 }
-OUTPUT_CLASSES = len(LABELS)
+OUTPUT_CLASSES = 1
+# OUTPUT_CLASSES = len(LABELS)
 
 # Initialize colorama
 init(autoreset=True)
@@ -157,7 +160,7 @@ def load_mask(image):
 def test(*args, **kwargs):
     return None
 
-def display1(display_list):
+def display1(display_list, output="display.png", forceSave=False):
     fig = plt.figure(figsize=(15, 15))
 
     title = []
@@ -169,8 +172,8 @@ def display1(display_list):
         plt.title(title[i])
         plt.imshow(tf.keras.utils.array_to_img(display_list[i]))
         plt.axis("off")
-    if IS_REMOTE:
-        fig.savefig("display.png")
+    if IS_REMOTE or forceSave:
+        fig.savefig(output)
     else:
         plt.show()
     
@@ -213,9 +216,10 @@ def load_and_preprocess_data():
             input_image = tf.image.resize(image, SIZE)
             input_mask = tf.image.resize(mask, SIZE, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
             
-            label_mask = np.zeros((*SIZE, 1), dtype=np.uint8)
-            for id, label in LABELS.items():
-                label_mask[np.all(input_mask == label, axis=-1)] = id
+            label_mask = np.ones((*SIZE, 1), dtype=np.bool_)
+            # for id, label in LABELS.items():
+            #     label_mask[np.all(input_mask == label, axis=-1)] = id
+            label_mask[np.all(input_mask == (0,0,0), axis=-1)] = False
 
             input_image, input_mask = normalize(input_image, input_mask)
             # display1([input_image, input_mask, label_mask])
@@ -237,6 +241,7 @@ def flip_hori(img, mask):
 
     
 def create_mask(pred_mask):
+    return (pred_mask > 0.5).astype(np.uint8)[0]
     pred_mask = tf.math.argmax(pred_mask, axis=-1)
     pred_mask = pred_mask[..., tf.newaxis]
     return pred_mask[0]
@@ -293,6 +298,11 @@ def load(*args):
 
     if ld:
         x, y = load_and_preprocess_data()
+        
+        for i in range(len(x)):
+            xx, yy = flip_hori(x[i], y[i])
+            x.append(xx)
+            y.append(yy)
 
         train_x, val_x, train_y, val_y = train_test_split(x, y, test_size=0.2, random_state=0)
 
@@ -325,12 +335,28 @@ def load(*args):
 
         test_batches = val.batch(BATCH_SIZE)
 
-        for images, masks in train_batches.take(2):
-            sample_image, sample_mask = images[0], masks[0]
-            display([sample_image, sample_mask])
+        
 
 
-
+def sample(*args):
+    global sample_image
+    global sample_mask
+    p = argparse.ArgumentParser('sample')
+    def onexit(*args, **kwargs):
+        global on_exit
+        on_exit = True
+    p.exit = onexit
+    a = p.parse_args(args)
+    if on_exit:
+        return
+    
+    # Dependency
+    load()
+    for images, masks in test_batches.shuffle(BUFFER_SIZE).take(1):
+        sample_image, sample_mask = images[0], masks[0]
+        display([sample_image, sample_mask])
+    
+    
 
 def unet_model1(output_channels: int):
     
@@ -454,6 +480,65 @@ def unet_model2(output_channels: int):
 
     return m
 
+def unet_model3(output_channels: int):
+    #Build the model
+    inputs = tf.keras.layers.Input((*SIZE, 3))
+    # s = tf.keras.layers.Lambda(lambda x: x / 255)(inputs)
+
+    #Contraction path
+    c1 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(inputs)
+    c1 = tf.keras.layers.Dropout(0.1)(c1)
+    c1 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c1)
+    p1 = tf.keras.layers.MaxPooling2D((2, 2))(c1)
+
+    c2 = tf.keras.layers.Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p1)
+    c2 = tf.keras.layers.Dropout(0.1)(c2)
+    c2 = tf.keras.layers.Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c2)
+    p2 = tf.keras.layers.MaxPooling2D((2, 2))(c2)
+    
+    c3 = tf.keras.layers.Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p2)
+    c3 = tf.keras.layers.Dropout(0.2)(c3)
+    c3 = tf.keras.layers.Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c3)
+    p3 = tf.keras.layers.MaxPooling2D((2, 2))(c3)
+    
+    c4 = tf.keras.layers.Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p3)
+    c4 = tf.keras.layers.Dropout(0.2)(c4)
+    c4 = tf.keras.layers.Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c4)
+    p4 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(c4)
+    
+    c5 = tf.keras.layers.Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p4)
+    c5 = tf.keras.layers.Dropout(0.3)(c5)
+    c5 = tf.keras.layers.Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
+
+    #Expansive path 
+    u6 = tf.keras.layers.Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(c5)
+    u6 = tf.keras.layers.concatenate([u6, c4])
+    c6 = tf.keras.layers.Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u6)
+    c6 = tf.keras.layers.Dropout(0.2)(c6)
+    c6 = tf.keras.layers.Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c6)
+    
+    u7 = tf.keras.layers.Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(c6)
+    u7 = tf.keras.layers.concatenate([u7, c3])
+    c7 = tf.keras.layers.Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u7)
+    c7 = tf.keras.layers.Dropout(0.2)(c7)
+    c7 = tf.keras.layers.Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c7)
+    
+    u8 = tf.keras.layers.Conv2DTranspose(32, (2, 2), strides=(2, 2), padding='same')(c7)
+    u8 = tf.keras.layers.concatenate([u8, c2])
+    c8 = tf.keras.layers.Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u8)
+    c8 = tf.keras.layers.Dropout(0.1)(c8)
+    c8 = tf.keras.layers.Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c8)
+    
+    u9 = tf.keras.layers.Conv2DTranspose(16, (2, 2), strides=(2, 2), padding='same')(c8)
+    u9 = tf.keras.layers.concatenate([u9, c1], axis=3)
+    c9 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u9)
+    c9 = tf.keras.layers.Dropout(0.1)(c9)
+    c9 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c9)
+    
+    outputs = tf.keras.layers.Conv2D(1, (1, 1), activation='sigmoid')(c9)
+    
+    m = tf.keras.Model(inputs=[inputs], outputs=[outputs])
+    return m
 
 on_exit = False
 def create_model(*args):
@@ -469,25 +554,30 @@ def create_model(*args):
     a = p.parse_args(args)
     if on_exit:
         return
-    load()
+    
+    if sample_image is None:
+        sample()
+    else:
+        load()
     
     create = not os.path.exists(MODEL_PATH)
     if a.overwrite:
         create = True
     if create:
         log_main.debug("Creating model.")
-        model = unet_model2(output_channels=OUTPUT_CLASSES)
+        model = unet_model1(output_channels=OUTPUT_CLASSES)
         log_main.debug("Compiling model.")
         model.compile(
-            optimizer=optimizers.Adadelta(),
-            loss=losses.MeanAbsoluteError(),
+            optimizer=optimizers.Adam(),
+            # loss=losses.MeanAbsoluteError(),
+            loss=losses.BinaryCrossentropy(),
             
             metrics=[
-                metrics.MeanSquaredError(),
-                metrics.CosineSimilarity(),
-                metrics.CategoricalAccuracy(),
+                # metrics.MeanSquaredError(),
+                # metrics.CosineSimilarity(),
+                # metrics.CategoricalAccuracy(),
                 
-                # 'accuracy',
+                'accuracy',
                 # metrics.MeanAbsoluteError(),
                 # No good:
                 # tf.metrics.CategoricalCrossentropy(from_logits=True, axis=1)
@@ -534,7 +624,7 @@ def train_ai(*args):
         return
     create_model()
     
-    cbs = [tf.keras.callbacks.ProgbarLogger('steps'), FileSaveCallback(), tf.keras.callbacks.ModelCheckpoint(MODEL_PATH)]
+    cbs = [tf.keras.callbacks.ProgbarLogger('steps'), FileSaveCallback(model), tf.keras.callbacks.ModelCheckpoint(MODEL_PATH)]
     if a.display:
         cbs.append(DisplayCallback())
     model_history = model.fit(train_batches, epochs=a.epochs,
@@ -562,7 +652,10 @@ def train_ai(*args):
 
 def predict(*args):
     p = argparse.ArgumentParser("predict")
+    p.add_argument('-s', '--select', action='store_true', help="select file with dialog")
+    p.add_argument('-u', '--url', type=str, help="from url")
     p.add_argument('-c', '--count', type=int, default=1, help="number of images to predict")
+    
     def onexit(*args, **kwargs):
         global on_exit
         on_exit = True
@@ -573,7 +666,22 @@ def predict(*args):
     
     create_model()
     
-    show_predictions(train_batches, [model], a.count)
+    if a.select:
+        root = tk.Tk()
+        root.withdraw()
+        file_path = filedialog.askopenfilename(title="Predict from image")
+        root.destroy()
+        
+        img_file = tf.io.read_file(file_path)
+        image = tf.image.decode_png(img_file, channels=3, dtype=tf.uint8)
+        image = tf.image.resize(image, SIZE)
+        image, _ = normalize(image, None)
+        pred_mask = (create_mask(model.predict(image[tf.newaxis, ...])))
+        display1([image, pred_mask], forceSave=True)
+    elif a.url:
+        pass
+    else:
+        show_predictions(train_batches, [model], a.count)
     
     
     
@@ -589,17 +697,17 @@ def benchmark_models(*args):
     if on_exit:
         return
     
-    load()
+    sample()
     
-    mdls = [unet_model1, unet_model2]
+    mdls = [unet_model1, unet_model2, unet_model3]
     
     opts:List[optimizers.Optimizer] = [
-        optimizers.Adam(),
-        optimizers.RMSprop(),
-        optimizers.SGD(),
-        optimizers.Adadelta(),
-        optimizers.Adamax(),
-        optimizers.Ftrl(),
+        optimizers.Adam,
+        optimizers.RMSprop,
+        optimizers.SGD,
+        optimizers.Adadelta,
+        optimizers.Adamax,
+        optimizers.Ftrl,
     ]
     
     lss:List[losses.Loss] = [
@@ -609,34 +717,43 @@ def benchmark_models(*args):
         # losses.MeanSquaredLogarithmicError(),
         # losses.MeanSquaredError(),
         # losses.CategoricalHinge(),
-        losses.MeanAbsolutePercentageError(),
-        losses.MeanAbsoluteError(),
-        losses.CategoricalCrossentropy(from_logits=True),
-        losses.SparseCategoricalCrossentropy(from_logits=True),
-        losses.Poisson(),
+        losses.MeanAbsolutePercentageError,
+        losses.MeanAbsoluteError,
+        losses.CategoricalCrossentropy,
+        losses.SparseCategoricalCrossentropy,
+        losses.Poisson,
+        losses.BinaryCrossentropy,
+        losses.BinaryFocalCrossentropy,
     ]
     
     mts:List[metrics.Metric] = [
-        metrics.MeanSquaredError(),
-        metrics.Accuracy(),
-        metrics.CosineSimilarity(),
-        metrics.CategoricalCrossentropy(from_logits=True),
-        metrics.Mean(),
-        metrics.LogCoshError(),
-        metrics.CategoricalAccuracy(),
-        metrics.MeanAbsoluteError(),
-        metrics.MeanTensor(),
-        metrics.SparseCategoricalAccuracy(),
+        metrics.MeanSquaredError,
+        metrics.Accuracy,
+        metrics.CosineSimilarity,
+        metrics.CategoricalCrossentropy,
+        metrics.Mean,
+        metrics.LogCoshError,
+        metrics.CategoricalAccuracy,
+        metrics.MeanAbsoluteError,
+        metrics.MeanTensor,
+        metrics.SparseCategoricalAccuracy,
+        metrics.BinaryAccuracy,
+        metrics.BinaryCrossentropy,
+        metrics.BinaryIoU,
+        metrics.AUC,
     ]
     
     permutations:List[Tuple(Callable[[int], tf.keras.Model], optimizers.Optimizer, losses.Loss, metrics.Metric, str)] = []
     for i, cm in enumerate(mdls):
         mdp = '/'.join([CACHE_PATH, f"Model{i+1}"])
         for opt in opts:
+            opt = opt()
             optp = '/'.join([mdp, opt.name])
             for ls in lss:
+                ls = ls()
                 lsp = '/'.join([optp, ls.name])
                 for mt in mts:
+                    mt = mt()
                     mtp = '/'.join([lsp, mt.name])
                     os.makedirs(mtp, exist_ok=True)
                     if os.path.exists(f"{mtp}/failed.log"):
@@ -668,7 +785,7 @@ def benchmark_models(*args):
             try:
                 mdl.compile(optimizer=optimizer, loss=loss, metrics=[metric])
                 mdl.save(compiledPath)
-            except Exception as e:
+            except KeyError or ValueError as e:
                 p = Path(failPath)
                 p.touch()
                 with p.open('w') as wr:
@@ -679,7 +796,7 @@ def benchmark_models(*args):
             return mdl
             
         def trn(mdl:tf.keras.Model):
-            cbs = [tf.keras.callbacks.ProgbarLogger('steps', [loss, metric]), FileSaveCallback(mdl)]
+            cbs = [tf.keras.callbacks.ProgbarLogger('steps'), FileSaveCallback(mdl)]
             try:
                 model_history = mdl.fit(train_batches, epochs=a.epochs,
                                     steps_per_epoch=STEPS_PER_EPOCH,
@@ -701,7 +818,7 @@ def benchmark_models(*args):
                 fig.savefig(plotPath)
                 
                 show_predictions(models=[mdl], output=resultPath)
-            except Exception as e:
+            except KeyError or ValueError as e:
                 p = Path(failPath)
                 p.touch()
                 with p.open('w') as wr:
@@ -767,7 +884,7 @@ def benchmark_results(*args):
     if on_exit:
         return
     shape = (0,0,0)
-    
+    sample()
     
     
     unique:List[Tuple(str,str,str,str, cv2.Mat)]=[]
@@ -801,7 +918,6 @@ def benchmark_results(*args):
         choices[mdln] = mdlns
     
     if a.predict:
-        load()
         for u in tqdm(unique, "Predicting", len(unique)):
             pth = u[-1]
             mdl:tf.keras.Model = tf.keras.models.load_model(f"{pth}/trained.h5")
@@ -900,6 +1016,7 @@ def benchmark_results(*args):
     
 menus:Menu = {
     'load' : load,
+    'sample' : sample,
     'create' : create_model,
     'plot' : draw_model,
     'train' : train_ai,
