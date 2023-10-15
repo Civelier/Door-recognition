@@ -555,7 +555,6 @@ def create_model(*args):
         on_exit = True
     p.exit = onexit
     a = p.parse_args(args)
-    global on_exit
     if on_exit:
         on_exit = False
         return
